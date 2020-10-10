@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 // reserve high 8 bits for remote id
+//单个进程内的服务数量被限制在 HANDLE_MASK 个，其中handle的高8位地址用于集群间通信
 #define HANDLE_MASK 0xffffff
 #define HANDLE_REMOTE_SHIFT 24
 

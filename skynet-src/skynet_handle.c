@@ -17,20 +17,21 @@ struct handle_name {
 };
 
 struct handle_storage {
-	struct rwlock lock;
+    struct rwlock lock; //读写锁
 
-	uint32_t harbor;
-	uint32_t handle_index;
-	int slot_size;
-	struct skynet_context ** slot;
-	
-	int name_cap;
-	int name_count;
-	struct handle_name *name;
+    uint32_t harbor;    //harbor 指代该 handle_storage 属于哪个 skynet 节点。skynet 允许最多 255 个节点，每个节点有自己的harbor id
+    uint32_t handle_index;  //context 在 slot 当中的下标
+    int slot_size;          //slot 初始大小为 4，且 slot_size 必定为 2 的整数次幂
+    struct skynet_context ** slot;  //保存 context 的数组，相当于一个 hash table
+    
+    int name_cap;   //命名列表的容量
+    int name_count; //命名列表当前元素的个数
+    struct handle_name *name;   //用于存放 handle_name 的数组，其中按照 name 的字典序排列，插入和查找都可以使用二分法
 };
 
 static struct handle_storage *H = NULL;
 
+//为服务分配一个不重复的 handle，利用handle 将对应的上下文散列到 slot 中
 uint32_t
 skynet_handle_register(struct skynet_context *ctx) {
 	struct handle_storage *s = H;
@@ -40,9 +41,11 @@ skynet_handle_register(struct skynet_context *ctx) {
 	for (;;) {
 		int i;
 		uint32_t handle = s->handle_index;
+		//在 HANDLE_MASK 范围内为服务分配一个不重复的handle id
 		for (i=0;i<s->slot_size;i++,handle++) {
 			if (handle > HANDLE_MASK) {
 				// 0 is reserved
+				//0 号 handle 为系统保留的handle，用于指代自己
 				handle = 1;
 			}
 			int hash = handle & (s->slot_size-1);
@@ -51,12 +54,13 @@ skynet_handle_register(struct skynet_context *ctx) {
 				s->handle_index = handle + 1;
 
 				rwlock_wunlock(&s->lock);
-
+				//分配好 handle 后，需要将 harbor 填充到 handle 的高 8 位处
 				handle |= s->harbor;
 				return handle;
 			}
 		}
 		assert((s->slot_size*2 - 1) <= HANDLE_MASK);
+		//当 slot 满了的时候，对其进行扩容，然后重复分配 handle 的过程
 		struct skynet_context ** new_slot = skynet_malloc(s->slot_size * 2 * sizeof(struct skynet_context *));
 		memset(new_slot, 0, s->slot_size * 2 * sizeof(struct skynet_context *));
 		for (i=0;i<s->slot_size;i++) {
@@ -85,6 +89,7 @@ skynet_handle_retire(uint32_t handle) {
 		ret = 1;
 		int i;
 		int j=0, n=s->name_count;
+		//找到对应的 handle 并释放其服务名称所占有的内存空间。释放完毕后将后续空间向前移动，使得内存布局紧凑，避免存在空洞
 		for (i=0; i<n; ++i) {
 			if (s->name[i].handle == handle) {
 				skynet_free(s->name[i].name);
@@ -144,6 +149,7 @@ skynet_handle_grab(uint32_t handle) {
 	struct skynet_context * ctx = s->slot[hash];
 	if (ctx && skynet_context_handle(ctx) == handle) {
 		result = ctx;
+		//增加 ctx 的引用计数(原子性)
 		skynet_context_grab(result);
 	}
 
@@ -152,6 +158,7 @@ skynet_handle_grab(uint32_t handle) {
 	return result;
 }
 
+//handle_name 数组是按照 name 的字典序进行排列的，故可以采用二分查找
 uint32_t 
 skynet_handle_findname(const char * name) {
 	struct handle_storage *s = H;
@@ -232,6 +239,7 @@ _insert_name(struct handle_storage *s, const char * name, uint32_t handle) {
 	return result;
 }
 
+//将一个服务的句柄和名字插入到 handle_storage 的 handle_name 数组中
 const char * 
 skynet_handle_namehandle(uint32_t handle, const char *name) {
 	rwlock_wlock(&H->lock);
@@ -253,6 +261,8 @@ skynet_handle_init(int harbor) {
 
 	rwlock_init(&s->lock);
 	// reserve 0 for system
+	//skynet 的集群机制最多可以允许有 255 个节点。其中每个节点都有一个自己的 harbor id，被编码在 harbor 标号的高8位
+	//通过不同的 harbor id 就可以轻松分辨当前节点所受到的数据包到底是来自于本地还是来自于远程
 	s->harbor = (uint32_t) (harbor & 0xff) << HANDLE_REMOTE_SHIFT;
 	s->handle_index = 1;
 	s->name_cap = 2;

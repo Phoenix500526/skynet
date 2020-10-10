@@ -3,14 +3,15 @@
 
 struct skynet_context;
 
+//每一个模块都应当提供 create、init、release 以及 signal 等四个接口
 typedef void * (*skynet_dl_create)(void);
 typedef int (*skynet_dl_init)(void * inst, struct skynet_context *, const char * parm);
 typedef void (*skynet_dl_release)(void * inst);
 typedef void (*skynet_dl_signal)(void * inst, int signal);
 
 struct skynet_module {
-	const char * name;
-	void * module;
+	const char * name; //模块名称
+	void * module;     //用于访问对应so库的句柄，由dlopen函数获得
 	skynet_dl_create create;
 	skynet_dl_init init;
 	skynet_dl_release release;

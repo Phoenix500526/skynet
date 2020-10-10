@@ -19,17 +19,17 @@
 #define MQ_OVERLOAD 1024
 
 struct message_queue {
-	struct spinlock lock;
-	uint32_t handle;
-	int cap;
+	struct spinlock lock;	//自旋锁，避免多个线程同时向一个队列中 push 消息时导致的竞态问题
+	uint32_t handle;	//服务句柄。表明该消息队列具体属于哪个服务
+	int cap;			//消息队列的容量,默认大小是64(DEFAULT_QUEUE_SIZE)
 	int head;
 	int tail;
-	int release;
-	int in_global;
-	int overload;
-	int overload_threshold;
-	struct skynet_message *queue;
-	struct message_queue *next;
+	int release;		//是否可以释放信息
+	int in_global;		//是否位于全局队列当中
+	int overload;		//是否过载
+	int overload_threshold;	//过载上限
+	struct skynet_message *queue;	//指向消息队列中存放消息的一片内存区域
+	struct message_queue *next;		//指向下个次级消息队列的指针
 };
 
 struct global_queue {
@@ -124,6 +124,7 @@ skynet_mq_length(struct message_queue *q) {
 	return tail + cap - head;
 }
 
+//返回是否过载，过载多少
 int
 skynet_mq_overload(struct message_queue *q) {
 	if (q->overload) {
@@ -145,14 +146,17 @@ skynet_mq_pop(struct message_queue *q, struct skynet_message *message) {
 		int head = q->head;
 		int tail = q->tail;
 		int cap = q->cap;
-
+		//情况1：当 head >= cap 时，所取出的 head 必定是最后一个元素
 		if (head >= cap) {
 			q->head = head = 0;
 		}
 		int length = tail - head;
+		//情况2：tail - head = -1，说明此时队列为空
 		if (length < 0) {
+			//计算当前 queue 的最后一个位置的下标
 			length += cap;
 		}
+		//若最后一个下标超过了过载阈值，则更新过载信息
 		while (length > q->overload_threshold) {
 			q->overload = length;
 			q->overload_threshold *= 2;

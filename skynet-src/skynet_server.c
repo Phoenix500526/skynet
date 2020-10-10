@@ -41,28 +41,28 @@
 #endif
 
 struct skynet_context {
-	void * instance;
-	struct skynet_module * mod;
-	void * cb_ud;
-	skynet_cb cb;
-	struct message_queue *queue;
-	FILE * logfile;
-	uint64_t cpu_cost;	// in microsec
-	uint64_t cpu_start;	// in microsec
-	char result[32];
-	uint32_t handle;
-	int session_id;
-	int ref;
-	int message_count;
-	bool init;
-	bool endless;
-	bool profile;
+    void * instance;    //调用模块的 *_create 函数创建对应的服务实例
+    struct skynet_module * mod; //指向对应的模块
+    void * cb_ud;   //回调函数所需参数
+    skynet_cb cb;   //回调函数
+    struct message_queue *queue;    //服务所属的消息队列
+    FILE * logfile;     //日志文件句柄
+    uint64_t cpu_cost;  // in microsec
+    uint64_t cpu_start; // in microsec
+    char result[32];    //存放回调函数的执行结果
+    uint32_t handle;    //位于该上下文环境中的一个服务的句柄
+    int session_id;     //session_id 用来将
+    int ref;            //引用计数，当 ref == 0 时回收内存
+    int message_count;  //消息队列中消息的数量？
+    bool init;          //是否完成了初始化
+    bool endless;       //该服务是否是一个无限循环
+    bool profile;		//是否有用户配置文件
 
-	CHECKCALLING_DECL
+    CHECKCALLING_DECL
 };
 
 struct skynet_node {
-	int total;
+	int total;	//位于该 skynet_node 下的服务总数
 	int init;
 	uint32_t monitor_exit;
 	pthread_key_t handle_key;
@@ -137,6 +137,8 @@ skynet_context_new(const char * name, const char *param) {
 
 	ctx->mod = mod;
 	ctx->instance = inst;
+	//此处将引用置为 2 的原因是因为在 skynet_handle_register 中会将 ctx 保存起来，增加一次引用。
+	//之后再将 ctx 返回给对应的变量，增加了一次引用，因此 ref = 2
 	ctx->ref = 2;
 	ctx->cb = NULL;
 	ctx->cb_ud = NULL;
@@ -161,6 +163,7 @@ skynet_context_new(const char * name, const char *param) {
 	int r = skynet_module_instance_init(mod, inst, ctx, param);
 	CHECKCALLING_END(ctx)
 	if (r == 0) {
+		//skynet_context_release 会在 ctx->ref == 0 时回收这个 context
 		struct skynet_context * ret = skynet_context_release(ctx);
 		if (ret) {
 			ctx->init = true;
@@ -675,9 +678,20 @@ skynet_command(struct skynet_context * context, const char * cmd , const char * 
 	return NULL;
 }
 
+/*
+#define PTYPE_TEXT 0
+#define PTYPE_RESPONSE 1
+#define PTYPE_MULTICAST 2
+#define PTYPE_CLIENT 3
+#define PTYPE_SYSTEM 4
+#define PTYPE_HARBOR 5
+#define PTYPE_TAG_DONTCOPY 0x10000
+#define PTYPE_TAG_ALLOCSESSION 0x20000
+ */
 static void
 _filter_args(struct skynet_context * context, int type, int *session, void ** data, size_t * sz) {
 	int needcopy = !(type & PTYPE_TAG_DONTCOPY);
+	//分配一个没有被使用过的 session 
 	int allocsession = type & PTYPE_TAG_ALLOCSESSION;
 	type &= 0xff;
 

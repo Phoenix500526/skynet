@@ -5,7 +5,12 @@
 #include <stdint.h>
 
 struct skynet_message {
+    //消息发送的原地址
 	uint32_t source;
+    //skynet采用请求回应的方式。当一个服务向另一个服务发送请求时，会生成一个 session。当响应端处理结束后会将结果返回，此时请求端可以根据
+    //session 字段找到处理完毕的结果。
+    //当 lua 层调用 call 时，push一个消息，并且生成一个session，然后将本地的协程挂起，挂起时，会以session为key，协程句  
+    // 柄为值，放入一个table中，当回应消息送达时，通过session找到对应的协程，并将其唤醒。
 	int session;
 	void * data;
 	size_t sz;

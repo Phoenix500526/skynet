@@ -12,11 +12,12 @@
 
 #define MAX_MODULE_TYPE 32
 
+//modules 列表，用于存放对应的 module 
 struct modules {
-	int count;
+	int count;	//存放的 module 的数量
 	struct spinlock lock;
-	const char * path;
-	struct skynet_module m[MAX_MODULE_TYPE];
+	const char * path;	//path由配置文件中的module_path提供
+	struct skynet_module m[MAX_MODULE_TYPE];	//存储module的数组
 };
 
 static struct modules * M = NULL;
@@ -73,6 +74,7 @@ _query(const char * name) {
 	return NULL;
 }
 
+//从动态库中找到对应的 api 并将其函数地址返回
 static void *
 get_api(struct skynet_module *mod, const char *api_name) {
 	size_t name_size = strlen(mod->name);
@@ -99,6 +101,7 @@ open_sym(struct skynet_module *mod) {
 	return mod->init == NULL;
 }
 
+//根据模块名查找对应的模块，如果找不到且 modules 中尚有空间则将模块加载进来
 struct skynet_module * 
 skynet_module_query(const char * name) {
 	struct skynet_module * result = _query(name);
@@ -145,8 +148,10 @@ skynet_module_insert(struct skynet_module *mod) {
 void * 
 skynet_module_instance_create(struct skynet_module *m) {
 	if (m->create) {
+		//如果定义了 create 函数，则存在一种可能，即当 create 函数返回 NULL 时，说明内存可能耗尽，无法创建实例
 		return m->create();
 	} else {
+		//此处 return (void *)(intptr_t)(~0) 是为了避免和前面所说到的 NULL 相混淆
 		return (void *)(intptr_t)(~0);
 	}
 }
