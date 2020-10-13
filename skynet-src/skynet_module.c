@@ -109,7 +109,7 @@ skynet_module_query(const char * name) {
 		return result;
 
 	SPIN_LOCK(M)
-
+	//由于 modules 是全局共享的，因此需要避免在 SPIN_LOCK 期间有其他服务将同一个模块插入到 modules 当中，从而导致重复插入
 	result = _query(name); // double check
 
 	if (result == NULL && M->count < MAX_MODULE_TYPE) {
@@ -132,6 +132,7 @@ skynet_module_query(const char * name) {
 	return result;
 }
 
+// module_insert 在 skynet 中没有被使用到，可以使用 skynet_module_query 来代替
 void 
 skynet_module_insert(struct skynet_module *mod) {
 	SPIN_LOCK(M)

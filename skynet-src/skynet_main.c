@@ -86,7 +86,9 @@ int sigign() {
 static const char * load_config = "\
 	local result = {}\n\
 	local function getenv(name) return assert(os.getenv(name), [[os.getenv() failed: ]] .. name) end\n\
+	--利用 package.config 取出分隔符，linux 下默认是/ \n\
 	local sep = package.config:sub(1,1)\n\
+	--当前路径等于 ./\n\
 	local current_path = [[.]]..sep\n\
 	local function include(filename)\n\
 		local last_path = current_path\n\
@@ -100,6 +102,7 @@ static const char * load_config = "\
 		else\n\
 			name = filename\n\
 		end\n\
+		--打开配置文件 \n\
 		local f = assert(io.open(current_path .. name))\n\
 		local code = assert(f:read [[*a]])\n\
 		code = string.gsub(code, [[%$([%w_%d]+)]], getenv)\n\
@@ -109,6 +112,7 @@ static const char * load_config = "\
 	end\n\
 	setmetatable(result, { __index = { include = include } })\n\
 	local config_name = ...\n\
+	--include zuiz
 	include(config_name)\n\
 	setmetatable(result, nil)\n\
 	return result\n\
@@ -136,16 +140,18 @@ main(int argc, char *argv[]) {
 	// init the lock of code cache
 	luaL_initcodecache();
 #endif
-
+	//创建一个新的 lua 状态，并将 lua 库加载进去, 该函数使用默认分配函数来进行创建
 	struct lua_State *L = luaL_newstate();
 	luaL_openlibs(L);	// link lua lib
-
+	//将 load_config 加载为 lua 代码块，"t" 表示代码块的类型是文本类型，代码块的名称为 “=[skynet config]”
 	int err =  luaL_loadbufferx(L, load_config, strlen(load_config), "=[skynet config]", "t");
 	assert(err == LUA_OK);
+	//向 lua 的虚拟栈中压入
 	lua_pushstring(L, config_file);
-
+	//lua_pcall 的第二个参数表示传递的参数个数，第三个参数表示期望的结果数量，第四个参数表示错误处理函数
 	err = lua_pcall(L, 1, 1, 0);
 	if (err) {
+		//lua_tostring(L,-1) 返回栈顶元素
 		fprintf(stderr,"%s\n",lua_tostring(L,-1));
 		lua_close(L);
 		return 1;

@@ -19,11 +19,11 @@
 #include <signal.h>
 
 struct monitor {
-	int count;
-	struct skynet_monitor ** m;
+	int count;	//该 monitor 所监视的线程数量
+	struct skynet_monitor ** m;	//每个 worker thread 都有对应的一个 skynet_monitor 
 	pthread_cond_t cond;
 	pthread_mutex_t mutex;
-	int sleep;
+	int sleep;	//休眠时间
 	int quit;
 };
 
@@ -97,6 +97,7 @@ thread_monitor(void *p) {
 	int n = m->count;
 	skynet_initthread(THREAD_MONITOR);
 	for (;;) {
+		//CHECK_ABORT : if (G_NODE.total == 0) break;
 		CHECK_ABORT
 		for (i=0;i<n;i++) {
 			skynet_monitor_check(m->m[i]);
@@ -205,7 +206,7 @@ start(int thread) {
 	create_thread(&pid[0], thread_monitor, m);
 	create_thread(&pid[1], thread_timer, m);
 	create_thread(&pid[2], thread_socket, m);
-
+	//worker 线程的权重值
 	static int weight[] = { 
 		-1, -1, -1, -1, 0, 0, 0, 0,
 		1, 1, 1, 1, 1, 1, 1, 1, 

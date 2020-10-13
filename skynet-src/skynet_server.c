@@ -63,9 +63,9 @@ struct skynet_context {
 
 struct skynet_node {
 	int total;	//位于该 skynet_node 下的服务总数
-	int init;
-	uint32_t monitor_exit;
-	pthread_key_t handle_key;
+	int init;	//初始化标记
+	uint32_t monitor_exit;	//monitor 线程的退出标记
+	pthread_key_t handle_key;	//handle_key 是一个线程独有的全局变量
 	bool profile;	// default is off
 };
 
@@ -298,14 +298,15 @@ skynet_context_dispatchall(struct skynet_context * ctx) {
 
 struct message_queue * 
 skynet_context_message_dispatch(struct skynet_monitor *sm, struct message_queue *q, int weight) {
+	//从全局消息队列中取出一个次级消息队列
 	if (q == NULL) {
 		q = skynet_globalmq_pop();
 		if (q==NULL)
 			return NULL;
 	}
-
+	//获得该次级消息队列所对应的服务的句柄
 	uint32_t handle = skynet_mq_handle(q);
-
+	//获取服务上下文
 	struct skynet_context * ctx = skynet_handle_grab(handle);
 	if (ctx == NULL) {
 		struct drop_t d = { handle };
@@ -321,27 +322,35 @@ skynet_context_message_dispatch(struct skynet_monitor *sm, struct message_queue 
 			skynet_context_release(ctx);
 			return skynet_globalmq_pop();
 		} else if (i==0 && weight >= 0) {
+			//根据不同线程的权重取出不同数量的消息。
+			//-1 代表只取 1 条， 0 代表取出全部，1代表取出二分之一，2代表取出四分之一，3代表取出八分之一
 			n = skynet_mq_length(q);
 			n >>= weight;
 		}
+		//检测次级消息队列是否过载
 		int overload = skynet_mq_overload(q);
 		if (overload) {
 			skynet_error(ctx, "May overload, message queue length = %d", overload);
 		}
-
+		//在 worker 线程消费消息之前执行 skynet_monitor_trigger，该函数会原子性增加 sm->version 的值
 		skynet_monitor_trigger(sm, msg.source , handle);
 
 		if (ctx->cb == NULL) {
 			skynet_free(msg.data);
 		} else {
+			//skynet_monitor_trigger 递增 sm->version, 而 skynet_monitor_check 会使得 sm->check_version = sm->version
+			//monitor 线程会每隔 5 秒调用一次skynet_monitor_check。如果在两次 skynet_monitor_trigger 的调用期间，monitor 线程
+			//执行了两次 skynet_monitor_check 则会触发 monitor 的警报，向用户发送日志信息
 			dispatch_message(ctx, &msg);
 		}
-
+		//在 worker 线程消费完消息后，将 source 和 destination 设置为 0.这样就不会触发 monitor 线程的警报
 		skynet_monitor_trigger(sm, 0,0);
 	}
 
 	assert(q == ctx->queue);
 	struct message_queue *nq = skynet_globalmq_pop();
+	//如果全局消息队列中还有其他的消息队列，则取出一个消息队列，然后将当前处理的消息队列放入，再将新的队列返回
+	//此举是为了避免 skynet 反复操作到同一个队列，将处理机会让给其他队列
 	if (nq) {
 		// If global mq is not empty , push q back, and return next queue (nq)
 		// Else (global mq is empty or block, don't push q back, and return q again (for next dispatch)
@@ -823,6 +832,7 @@ skynet_globalinit(void) {
 	G_NODE.total = 0;
 	G_NODE.monitor_exit = 0;
 	G_NODE.init = 1;
+	//NULL 表示释放该 handle_key 时使用系统默认的回收函数
 	if (pthread_key_create(&G_NODE.handle_key, NULL)) {
 		fprintf(stderr, "pthread_key_create failed");
 		exit(1);
@@ -839,6 +849,7 @@ skynet_globalexit(void) {
 void
 skynet_initthread(int m) {
 	uintptr_t v = (uint32_t)(-m);
+	//将 handle_key 作为键， v 的地址作为值的缓冲区。
 	pthread_setspecific(G_NODE.handle_key, (void *)v);
 }
 
