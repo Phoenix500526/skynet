@@ -25,36 +25,41 @@ typedef void (*timer_execute_func)(void *ud,void *arg);
 #define TIME_NEAR (1 << TIME_NEAR_SHIFT)
 #define TIME_LEVEL_SHIFT 6
 #define TIME_LEVEL (1 << TIME_LEVEL_SHIFT)
+// TIME_NEAR_MASK = 0x11111111
 #define TIME_NEAR_MASK (TIME_NEAR-1)
+// TIME_LEVEL_MASK = 0x111111
 #define TIME_LEVEL_MASK (TIME_LEVEL-1)
 
 struct timer_event {
-	uint32_t handle;
-	int session;
+	uint32_t handle;	//标记该超时时间所对应的服务
+	int session;		//超时事件发送消息所属的 handle
 };
 
+//定时器节点
 struct timer_node {
 	struct timer_node *next;
-	uint32_t expire;
+	uint32_t expire;	//超时事件
 };
 
+//定时器链表
 struct link_list {
-	struct timer_node head;
-	struct timer_node *tail;
+	struct timer_node head;	//链表头节点，该节点不存放定时器
+	struct timer_node *tail;//链表尾节点指针
 };
 
 struct timer {
-	struct link_list near[TIME_NEAR];
+	struct link_list near[TIME_NEAR];	//near是一个定时器链表数组，可分为 0～255 个刻度
 	struct link_list t[4][TIME_LEVEL];
 	struct spinlock lock;
 	uint32_t time;
-	uint32_t starttime;
-	uint64_t current;
-	uint64_t current_point;
+	uint32_t starttime;		//从 1970-01-01:00:00:00 至定时器初始化时所经过的秒数
+	uint64_t current;		//保存 starttime 所舍弃的不足1秒的部分，其精度为 10 ms
+	uint64_t current_point;	//当前时间的单调时
 };
 
 static struct timer * TI = NULL;
 
+//返回定时器链表中的所有元素，然后清空链表(定时器链表为带有头节点的单链表)
 static inline struct timer_node *
 link_clear(struct link_list *list) {
 	struct timer_node * ret = list->head.next;
@@ -64,6 +69,7 @@ link_clear(struct link_list *list) {
 	return ret;
 }
 
+//从链表尾部插入节点
 static inline void
 link(struct link_list *list,struct timer_node *node) {
 	list->tail->next = node;
@@ -73,9 +79,9 @@ link(struct link_list *list,struct timer_node *node) {
 
 static void
 add_node(struct timer *T,struct timer_node *node) {
-	uint32_t time=node->expire;
-	uint32_t current_time=T->time;
-	
+	uint32_t time=node->expire;		//节点的超时时间
+	uint32_t current_time=T->time;	
+	//expire 和 time 的高 24 位相同，则将 node 压入 near 数组中链表
 	if ((time|TIME_NEAR_MASK)==(current_time|TIME_NEAR_MASK)) {
 		link(&T->near[time&TIME_NEAR_MASK],node);
 	} else {
@@ -105,6 +111,7 @@ timer_add(struct timer *T,void *arg,size_t sz,int time) {
 	SPIN_UNLOCK(T);
 }
 
+//将 t[level][idx] 中的链表取出，并不断其中的节点重新插入
 static void
 move_list(struct timer *T, int level, int idx) {
 	struct timer_node *current = link_clear(&T->t[level][idx]);
@@ -119,7 +126,9 @@ static void
 timer_shift(struct timer *T) {
 	int mask = TIME_NEAR;
 	uint32_t ct = ++T->time;
+	//ct == 0 代表发生了回绕
 	if (ct == 0) {
+		//将 t[3][0] 中链表取出并依次添加
 		move_list(T, 3, 0);
 	} else {
 		uint32_t time = ct >> TIME_NEAR_SHIFT;
@@ -138,6 +147,7 @@ timer_shift(struct timer *T) {
 	}
 }
 
+//向 current 中所有的定时器发送超时消息
 static inline void
 dispatch_list(struct timer_node *current) {
 	do {
@@ -156,8 +166,10 @@ dispatch_list(struct timer_node *current) {
 	} while (current);
 }
 
+//从定时器中取出定时器链表并分派消息
 static inline void
 timer_execute(struct timer *T) {
+	//取出 time 的低 8 位
 	int idx = T->time & TIME_NEAR_MASK;
 	
 	while (T->near[idx].head.next) {
@@ -174,10 +186,10 @@ timer_update(struct timer *T) {
 	SPIN_LOCK(T);
 
 	// try to dispatch timeout 0 (rare condition)
-	timer_execute(T);
+	timer_execute(T);	//看看 near[T->time & TIME_NEAR_MASK] 中的链表是否为空
 
 	// shift time first, and then dispatch timer message
-	timer_shift(T);
+	timer_shift(T);	//移动链表，让 t 中的链表向下移动
 
 	timer_execute(T);
 
@@ -235,7 +247,9 @@ static void
 systime(uint32_t *sec, uint32_t *cs) {
 #if !defined(__APPLE__) || defined(AVAILABLE_MAC_OS_X_VERSION_10_12_AND_LATER)
 	struct timespec ti;
+	//获得现实时间
 	clock_gettime(CLOCK_REALTIME, &ti);
+	//将时间精度设置为 10 ms
 	*sec = (uint32_t)ti.tv_sec;
 	*cs = (uint32_t)(ti.tv_nsec / 10000000);
 #else
@@ -251,7 +265,10 @@ gettime() {
 	uint64_t t;
 #if !defined(__APPLE__) || defined(AVAILABLE_MAC_OS_X_VERSION_10_12_AND_LATER)
 	struct timespec ti;
+	//获得系统的单调时间(也就是从系统启动到当前所流逝的时间，精确到纳秒)
 	clock_gettime(CLOCK_MONOTONIC, &ti);
+	//1 s = 1000 ms， 1ms = 1000 us，1us = 1000 ns
+	//下面两个语句将时间精度设置在 10 ms 这一级别上
 	t = (uint64_t)ti.tv_sec * 100;
 	t += ti.tv_nsec / 10000000;
 #else
@@ -265,11 +282,13 @@ gettime() {
 
 void
 skynet_updatetime(void) {
+	//获得以 10 ms 为精度的单调时间
 	uint64_t cp = gettime();
 	if(cp < TI->current_point) {
 		skynet_error(NULL, "time diff error: change from %lld to %lld", cp, TI->current_point);
 		TI->current_point = cp;
 	} else if (cp != TI->current_point) {
+		//获得时间差
 		uint32_t diff = (uint32_t)(cp - TI->current_point);
 		TI->current_point = cp;
 		TI->current += diff;
@@ -294,8 +313,12 @@ void
 skynet_timer_init(void) {
 	TI = timer_create_timer();
 	uint32_t current = 0;
+	//systime 获得墙上时间后，会将其分为两个部分，sec 和 cses 部分
+	//TI->starttime 表示当前墙上时间的秒数，
 	systime(&TI->starttime, &current);
+	//TI->current 当前墙上时间的毫秒部分,精度为 10 ms
 	TI->current = current;
+	//TI->current_point 代表是精确到 10 ms的单调时间，表示从系统启动到当前所流失的时间
 	TI->current_point = gettime();
 }
 
